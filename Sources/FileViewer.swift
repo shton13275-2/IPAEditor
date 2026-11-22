@@ -11,14 +11,19 @@ struct FileEditorView: View {
 
     @State private var kind: Kind = .binary
     @State private var mode: Mode = .auto
+    @State private var lastMode: Mode = .auto
     @State private var text = ""
     @State private var data = Data()
-    @State private var info = ""
     @State private var message = ""
+    @State private var textDirty = false        // テキスト編集が未反映
+    @State private var dirty = false            // ファイルと内容が違う(未保存)
+    @State private var needsReclassify = false  // Hexで変更したので再判定が必要
+    @State private var plistFormat = PropertyListSerialization.PropertyListFormat.xml
 
     private static let imageExts: Set<String> = [
         "png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "heic", "heif", "webp", "ico"
     ]
+    private static let maxTextBytes = 2_000_000
 
     var body: some View {
         content
@@ -29,9 +34,11 @@ struct FileEditorView: View {
                     }
                     .pickerStyle(.segmented)
 
-                    Text(info + (message.isEmpty ? "" : "  ・  \(message)"))
+                    Text(infoLine)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 .padding(12)
                 .glassCard(cornerRadius: 24)
@@ -41,18 +48,49 @@ struct FileEditorView: View {
             .navigationTitle(url.lastPathComponent)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if canSave {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    ShareLink(item: url)
                     Button("保存") { save() }
+                        .disabled(!(dirty || textDirty))
                 }
             }
             .onAppear(perform: load)
+            .onChange(of: mode) { new in
+                guard new != lastMode else { return }
+                if lastMode == .auto && textDirty {
+                    if !commitText() { mode = lastMode; return }
+                }
+                if new == .auto && needsReclassify {
+                    classify()
+                    needsReclassify = false
+                }
+                lastMode = new
+            }
     }
 
-    private var canSave: Bool {
-        guard mode == .auto else { return false }
-        switch kind {
-        case .text, .plist: return true
-        default: return false
+    // MARK: 表示
+
+    private var infoLine: String {
+        let ext = url.pathExtension.lowercased()
+        var parts = [
+            ext.isEmpty ? "拡張子なし" : ext,
+            ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+        ]
+        if case .image(let img) = kind { parts.append("\(Int(img.size.width))×\(Int(img.size.height))") }
+        if dirty || textDirty { parts.append("● 未保存") }
+        if !message.isEmpty { parts.append(message) }
+        return parts.joined(separator: " ・ ")
+    }
+
+    private var textBinding: Binding<String> {
+        Binding(get: { text }, set: { text = $0; textDirty = true; message = "" })
+    }
+
+    private var hexEditor: some View {
+        HexEditorView(data: $data) {
+            dirty = true
+            needsReclassify = true
+            message = ""
         }
     }
 
@@ -60,7 +98,7 @@ struct FileEditorView: View {
     private var content: some View {
         switch mode {
         case .hex:
-            HexView(data: data)
+            hexEditor
         case .text:
             ScrollView {
                 Text(String(decoding: data.prefix(200_000), as: UTF8.self))
@@ -74,53 +112,80 @@ struct FileEditorView: View {
             case .image(let img):
                 ImageZoomView(image: img)
             case .text, .plist:
-                TextEditor(text: $text)
+                TextEditor(text: textBinding)
                     .font(.system(.footnote, design: .monospaced))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
             case .binary:
-                HexView(data: data)
+                hexEditor
             }
         }
     }
 
+    // MARK: 読み込み・判定・保存
+
     private func load() {
-        data = (try? Data(contentsOf: url)) ?? Data()
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            data = Data()
+            message = "読み込み失敗: \(error.localizedDescription)"
+        }
+        classify()
+    }
+
+    private func classify() {
         let ext = url.pathExtension.lowercased()
-        let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
-        info = "\(ext.isEmpty ? "拡張子なし" : ext) ・ \(size)"
+        var fmt = PropertyListSerialization.PropertyListFormat.xml
 
         if Self.imageExts.contains(ext), let img = UIImage(data: data) {
             kind = .image(img)
-            info += " ・ \(Int(img.size.width))×\(Int(img.size.height))"
         } else if ext == "plist" || data.starts(with: Array("bplist".utf8)),
-                  let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+                  let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: &fmt),
                   let xml = try? PropertyListSerialization.data(fromPropertyList: obj, format: .xml, options: 0),
                   let s = String(data: xml, encoding: .utf8) {
             kind = .plist
+            plistFormat = fmt
             text = s
-        } else if !data.prefix(8000).contains(0), let s = String(data: data, encoding: .utf8) {
+            textDirty = false
+        } else if data.count <= Self.maxTextBytes,
+                  !data.prefix(8000).contains(0),
+                  let s = String(data: data, encoding: .utf8) {
             kind = .text
             text = s
+            textDirty = false
         } else {
             kind = .binary
         }
     }
 
-    private func save() {
-        do {
-            switch kind {
-            case .plist:
-                // 入力されたXMLが正しいplistか検証してから保存(保存形式はXML)
-                let d = Data(text.utf8)
-                let obj = try PropertyListSerialization.propertyList(from: d, options: [], format: nil)
-                let out = try PropertyListSerialization.data(fromPropertyList: obj, format: .xml, options: 0)
-                try out.write(to: url)
-                data = out
-            default:
-                try text.write(to: url, atomically: true, encoding: .utf8)
-                data = Data(text.utf8)
+    /// テキスト編集を data に反映(plist は元の形式で書き戻す)
+    private func commitText() -> Bool {
+        guard textDirty else { return true }
+        switch kind {
+        case .plist:
+            do {
+                let obj = try PropertyListSerialization.propertyList(from: Data(text.utf8), options: [], format: nil)
+                data = try PropertyListSerialization.data(fromPropertyList: obj, format: plistFormat, options: 0)
+            } catch {
+                message = "plistの形式が不正です"
+                return false
             }
+        case .text:
+            data = Data(text.utf8)
+        default:
+            break
+        }
+        textDirty = false
+        dirty = true
+        return true
+    }
+
+    private func save() {
+        guard commitText() else { return }
+        do {
+            try data.write(to: url)
+            dirty = false
             message = "保存しました"
         } catch {
             message = "保存失敗: \(error.localizedDescription)"
@@ -155,53 +220,5 @@ struct ImageZoomView: View {
                     .padding(12)
             }
         }
-    }
-}
-
-struct HexView: View {
-    let data: Data
-    private let pageSize = 4096
-    @State private var page = 0
-
-    private var pageCount: Int { max(1, (data.count + pageSize - 1) / pageSize) }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button("◀︎ 前") { page = max(0, page - 1) }
-                    .glassButton().disabled(page == 0)
-                Spacer()
-                Text("\(page + 1) / \(pageCount)").font(.caption)
-                Spacer()
-                Button("次 ▶︎") { page = min(pageCount - 1, page + 1) }
-                    .glassButton().disabled(page >= pageCount - 1)
-            }
-            .padding(8)
-            .glassCapsule()
-            .padding(.horizontal)
-            .padding(.bottom, 4)
-
-            ScrollView([.vertical, .horizontal]) {
-                Text(dump(from: page * pageSize))
-                    .font(.system(size: 11, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(8)
-            }
-        }
-    }
-
-    private func dump(from start: Int) -> String {
-        var out = ""
-        let end = min(data.count, start + pageSize)
-        var i = start
-        while i < end {
-            let line = data[i..<min(i + 16, end)]
-            let hex = line.map { String(format: "%02X", $0) }.joined(separator: " ")
-            let pad = String(repeating: " ", count: (16 - line.count) * 3)
-            let ascii = String(line.map { ($0 >= 32 && $0 < 127) ? Character(UnicodeScalar($0)) : "." })
-            out += String(format: "%08X  ", i) + hex + pad + "  " + ascii + "\n"
-            i += 16
-        }
-        return out
     }
 }
