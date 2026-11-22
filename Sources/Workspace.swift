@@ -379,6 +379,7 @@ final class Workspace: ObservableObject {
         case "plist": return "list.bullet.rectangle"
         case "json", "xml", "txt", "md", "strings", "yml", "yaml", "csv", "log", "js", "html", "css", "swift": return "doc.text"
         case "db", "sqlite", "sqlite3": return "cylinder"
+        case "obj", "usdz", "usd", "usda", "usdc", "dae", "stl", "ply", "scn", "abc": return "cube"
         default: return "doc"
         }
     }
