@@ -3,14 +3,30 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject var ws: Workspace
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-        } detail: {
-            detail
+        Group {
+            if sizeClass == .regular {
+                // iPad: 2カラム（サイドバー + 詳細）
+                NavigationSplitView {
+                    sidebar
+                } detail: {
+                    NavigationStack { workspaceOrHome }
+                }
+                .navigationSplitViewStyle(.balanced)
+            } else {
+                // iPhone: サイドバーと作業画面を同じスタックで切り替える
+                // （NavigationSplitView は選択がないと詳細を表示しないため使わない）
+                NavigationStack {
+                    if ws.root != nil {
+                        workspaceOrHome
+                    } else {
+                        sidebar
+                    }
+                }
+            }
         }
-        .navigationSplitViewStyle(.balanced)
         .overlay { busyOverlay }
         .fileImporter(isPresented: pickerBinding,
                       allowedContentTypes: ws.pickerMode == .folder ? [.folder] : [.item]) { result in
@@ -32,6 +48,24 @@ struct ContentView: View {
 
     // MARK: 画面
 
+    @ViewBuilder
+    private var workspaceOrHome: some View {
+        if let root = ws.root {
+            workspace(root).id(ws.session)
+        } else {
+            home
+        }
+    }
+
+    @ViewBuilder
+    private func workspace(_ root: URL) -> some View {
+        if ws.kind == .file {
+            FileEditorView(url: root, isRoot: true)
+        } else {
+            FolderView(dir: root, ws: ws)
+        }
+    }
+
     private var sidebar: some View {
         List {
             Section("開く") {
@@ -50,22 +84,6 @@ struct ContentView: View {
             }
         }
         .navigationTitle("ファイルエディタ")
-    }
-
-    @ViewBuilder
-    private var detail: some View {
-        if let root = ws.root {
-            NavigationStack {
-                if ws.kind == .file {
-                    FileEditorView(url: root, isRoot: true)
-                } else {
-                    FolderView(dir: root, ws: ws)
-                }
-            }
-            .id(ws.session)
-        } else {
-            home
-        }
     }
 
     private var home: some View {
