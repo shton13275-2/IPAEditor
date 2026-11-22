@@ -9,7 +9,7 @@ struct FileEditorView: View {
     @EnvironmentObject var ws: Workspace
 
     enum Kind {
-        case image(UIImage), text, tree, binary, sqlite, media
+        case image(UIImage), text, tree, binary, sqlite, media, model
     }
     enum Mode: Hashable { case primary, text, hex, preview, analysis }
     enum Target { case text, tree, data }
@@ -30,6 +30,7 @@ struct FileEditorView: View {
     ]
     static let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "heic", "heif", "webp", "ico"]
     static let mediaExts: Set<String> = ["pdf", "mp4", "mov", "m4v", "mp3", "m4a", "wav", "aif", "aiff", "caf", "usdz", "usd", "usda", "usdc", "mpg", "mpeg"]
+    static let modelExts: Set<String> = ["obj", "usdz", "usd", "usda", "usdc", "dae", "stl", "ply", "scn", "abc"]
     static let maxTextBytes = 2_000_000
 
     @State private var kind: Kind = .binary
@@ -71,6 +72,7 @@ struct FileEditorView: View {
         case .binary: return [.primary, .preview, .analysis]
         case .sqlite: return [.primary, .hex, .analysis]
         case .media: return [.primary, .hex, .analysis]
+        case .model: return [.primary, .preview, .hex, .analysis]
         }
     }
 
@@ -84,6 +86,7 @@ struct FileEditorView: View {
             case .binary: return "Hex"
             case .sqlite: return "DB"
             case .media: return "プレビュー"
+            case .model: return "3D"
             }
         case .text: return "テキスト"
         case .hex: return "Hex"
@@ -180,6 +183,8 @@ struct FileEditorView: View {
             SQLiteBrowserView(url: url)
         case .media:
             QuickLookView(url: url)
+        case .model:
+            ModelViewerView(url: url)
         }
     }
 
@@ -391,6 +396,10 @@ struct FileEditorView: View {
         treeDirty = false
         if Self.imageExts.contains(ext), let img = UIImage(data: data) {
             kind = .image(img)
+            return
+        }
+        if Self.modelExts.contains(ext) {
+            kind = .model
             return
         }
         if data.starts(with: Array("SQLite format 3".utf8)) {
