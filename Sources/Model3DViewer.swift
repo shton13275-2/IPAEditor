@@ -5,10 +5,21 @@ import ModelIO
 /// OBJ / USDZ / DAE / STL / PLY などを読み込む
 enum ModelLoader {
     static func load(_ url: URL) -> SCNScene? {
+        // SceneKit が直接読める形式（USDZ / USD / DAE / OBJ など）
         if let s = try? SCNScene(url: url, options: nil) { return s }
+
+        // ModelIO で読んでから、SceneKit が読める一時ファイルに書き出して読み直す
+        // （SCNScene(mdlAsset:) はビルド環境で使えないため使用しない）
         let asset = MDLAsset(url: url)
         guard asset.count > 0 else { return nil }
-        return SCNScene(mdlAsset: asset)
+        let fm = FileManager.default
+        for ext in ["usdz", "usda", "obj"] {
+            let tmp = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString + "." + ext)
+            defer { try? fm.removeItem(at: tmp) }
+            guard (try? asset.export(to: tmp)) != nil else { continue }
+            if let s = try? SCNScene(url: tmp, options: nil) { return s }
+        }
+        return nil
     }
 }
 
