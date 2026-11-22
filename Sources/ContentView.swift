@@ -12,12 +12,26 @@ struct ContentView: View {
                 if let dir = mgr.workDir {
                     FolderView(dir: dir, mgr: mgr)
                 } else {
-                    VStack(spacing: 12) {
+                    VStack(spacing: 16) {
+                        Image(systemName: "shippingbox")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.secondary)
                         Text("ipaファイルを選択してください")
                         Button("ipaを開く") { picking = true }
-                            .buttonStyle(.borderedProminent)
-                        Text(mgr.message).font(.footnote).foregroundStyle(.secondary)
+                            .glassButton(prominent: true)
+                            .controlSize(.large)
+                        if !mgr.message.isEmpty {
+                            Text(mgr.message)
+                                .font(.footnote)
+                                .padding(.horizontal, 14).padding(.vertical, 8)
+                                .glassCapsule()
+                        }
                     }
+                    .padding(32)
+                    .glassCard(cornerRadius: 32)
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(GlassBackdrop())
                 }
             }
             .navigationTitle(mgr.ipaName)
@@ -51,12 +65,20 @@ struct FolderView: View {
         List {
             ForEach(items, id: \.self) { url in
                 if mgr.isDir(url) {
-                    NavigationLink(url.lastPathComponent) { FolderView(dir: url, mgr: mgr) }
+                    NavigationLink {
+                        FolderView(dir: url, mgr: mgr)
+                    } label: {
+                        Label(url.lastPathComponent, systemImage: "folder.fill")
+                    }
                 } else {
-                    NavigationLink(url.lastPathComponent) { FileEditorView(url: url) }
-                        .contextMenu {
-                            Button("差し替え") { replacing = url }
-                        }
+                    NavigationLink {
+                        FileEditorView(url: url)
+                    } label: {
+                        Label(url.lastPathComponent, systemImage: "doc")
+                    }
+                    .contextMenu {
+                        Button("差し替え") { replacing = url }
+                    }
                 }
             }
             .onDelete { idx in
@@ -71,35 +93,6 @@ struct FolderView: View {
             if case .success(let src) = result, let t = replacing { mgr.replace(t, with: src) }
             replacing = nil
             items = mgr.list(dir)
-        }
-    }
-}
-
-struct FileEditorView: View {
-    let url: URL
-    @State private var text = ""
-    @State private var isText = true
-
-    var body: some View {
-        Group {
-            if isText {
-                TextEditor(text: $text)
-                    .font(.system(.footnote, design: .monospaced))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-            } else {
-                Text("バイナリ/非テキストファイルです。長押しメニューの「差し替え」で置き換えてください。")
-                    .padding()
-            }
-        }
-        .navigationTitle(url.lastPathComponent)
-        .toolbar {
-            if isText {
-                Button("保存") { try? text.write(to: url, atomically: true, encoding: .utf8) }
-            }
-        }
-        .onAppear {
-            if let s = try? String(contentsOf: url, encoding: .utf8) { text = s } else { isText = false }
         }
     }
 }
