@@ -182,28 +182,31 @@ struct ContentView: View {
     }
 }
 
-/// 戻る/閉じるボタン。未保存の変更があれば確認を出す
+/// 戻る/閉じるボタン。通常はシステムの戻るボタン（スワイプ戻り）を使い、
+/// 未保存の変更があるときだけ独自ボタンに切り替えて確認を出す
 struct BackGuard: ViewModifier {
     @ObservedObject var ws: Workspace
     let isRoot: Bool
     @Environment(\.dismiss) var dismiss
 
+    private var useCustomBack: Bool { isRoot || ws.editorDirty }
+
     func body(content: Content) -> some View {
         content
-            .navigationBarBackButtonHidden(true)
+            .navigationBarBackButtonHidden(useCustomBack)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        if isRoot {
-                            ws.requestLeave { ws.close() }
-                        } else if ws.editorDirty {
-                            let back = dismiss
-                            ws.pendingLeave = LeaveRequest(kind: .unsavedEditor) { back() }
-                        } else {
-                            dismiss()
+                if useCustomBack {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            if isRoot {
+                                ws.requestLeave { ws.close() }
+                            } else {
+                                let back = dismiss
+                                ws.pendingLeave = LeaveRequest(kind: .unsavedEditor) { back() }
+                            }
+                        } label: {
+                            Label(isRoot ? "閉じる" : "戻る", systemImage: isRoot ? "xmark" : "chevron.backward")
                         }
-                    } label: {
-                        Label(isRoot ? "閉じる" : "戻る", systemImage: isRoot ? "xmark" : "chevron.backward")
                     }
                 }
             }
