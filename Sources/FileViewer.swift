@@ -2,6 +2,12 @@ import SwiftUI
 import UIKit
 
 /// ファイルの種類に応じて編集・表示する画面
+struct TextHit: Identifiable {
+    let id: Int
+    let line: Int
+    let snippet: String
+}
+
 struct FileEditorView: View {
     let url: URL
     var isRoot = false
@@ -30,7 +36,7 @@ struct FileEditorView: View {
     ]
     static let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif", "heic", "heif", "webp", "ico"]
     static let mediaExts: Set<String> = ["pdf", "mp4", "mov", "m4v", "mp3", "m4a", "wav", "aif", "aiff", "caf", "usdz", "usd", "usda", "usdc", "mpg", "mpeg"]
-    static let modelExts: Set<String> = ["obj", "usdz", "usd", "usda", "usdc", "dae", "stl", "ply", "scn", "abc"]
+    static let modelExts: Set<String> = ["obj", "usdz", "usd", "usda", "usdc", "dae", "stl", "ply", "scn", "abc", "gltf", "glb"]
     static let maxTextBytes = 2_000_000
 
     @State private var kind: Kind = .binary
@@ -56,6 +62,7 @@ struct FileEditorView: View {
     @State private var treeHistory = UndoStack<Any>()
     @State private var dataHistory = UndoStack<Data>()
     @State private var lastTextEdit = Date.distantPast
+    @State private var jumpLine: Int?
 
     private var isDirty: Bool { textDirty || treeDirty || dataDirty }
 
@@ -113,7 +120,7 @@ struct FileEditorView: View {
                 ws.editorSave = { saveInternal() }
             }
             .onDisappear {
-                ws.editorDirty = false
+                // 戻る操作の最中に公開状態を変えると画面遷移が崩れるため、保存処理の参照だけ解除する
                 ws.editorSave = nil
             }
             .onChange(of: isDirty) { ws.editorDirty = $0 }
@@ -191,23 +198,36 @@ struct FileEditorView: View {
     private var readOnlyText: some View {
         let lines = text.components(separatedBy: "\n")
         let axes: Axis.Set = showWrap ? .vertical : [.vertical, .horizontal]
-        return ScrollView(axes) {
-            HStack(alignment: .top, spacing: 10) {
-                if showLines {
-                    LazyVStack(alignment: .trailing, spacing: 0) {
-                        ForEach(lines.indices, id: \.self) { i in
-                            Text("\(i + 1)")
+        return ScrollViewReader { proxy in
+            ScrollView(axes) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(lines.indices, id: \.self) { i in
+                        HStack(alignment: .top, spacing: 10) {
+                            if showLines {
+                                Text("\(i + 1)")
+                                    .foregroundStyle(.secondary)
+                                    .frame(minWidth: 40, alignment: .trailing)
+                            }
+                            Text(lines[i])
+                                .textSelection(.enabled)
+                                .frame(maxWidth: showWrap ? .infinity : nil, alignment: .leading)
                         }
+                        .font(.system(.footnote, design: .monospaced))
+                        .background(i == jumpLine ? Color.accentColor.opacity(0.2) : Color.clear)
+                        .id(i)
                     }
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(.secondary)
                 }
-                Text(text)
-                    .font(.system(.footnote, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: showWrap ? .infinity : nil, alignment: .leading)
+                .padding(8)
             }
-            .padding(8)
+            .onAppear { scroll(proxy) }
+            .onChange(of: jumpLine) { _ in scroll(proxy) }
+        }
+    }
+
+    private func scroll(_ proxy: ScrollViewProxy) {
+        guard let line = jumpLine else { return }
+        DispatchQueue.main.async {
+            withAnimation { proxy.scrollTo(line, anchor: .center) }
         }
     }
 
@@ -255,6 +275,16 @@ struct FileEditorView: View {
                     Button("すべて置換") { replaceAll() }
                         .disabled(matchCount == 0)
                 }
+                Section("一致した行（\(textHits.count)件・タップで移動）") {
+                    ForEach(textHits) { hit in
+                        Button { jump(to: hit.line) } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(hit.line + 1)行").font(.caption).foregroundStyle(.secondary)
+                                Text(hit.snippet).font(.footnote.monospaced()).lineLimit(2)
+                            }
+                        }
+                    }
+                }
             }
             .navigationTitle("検索と置換")
             .navigationBarTitleDisplayMode(.inline)
@@ -263,6 +293,27 @@ struct FileEditorView: View {
                     Button("閉じる") { showFind = false }
                 }
             }
+        }
+    }
+
+    /// 検索語を含む行（先頭300件）
+    private var textHits: [TextHit] {
+        guard !findText.isEmpty else { return [] }
+        let opts: String.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
+        var out: [TextHit] = []
+        for (i, line) in text.components(separatedBy: "\n").enumerated() where line.range(of: findText, options: opts) != nil {
+            out.append(TextHit(id: i, line: i, snippet: String(line.prefix(120))))
+            if out.count >= 300 { break }
+        }
+        return out
+    }
+
+    /// 検索結果の行へ移動（読み取り表示に切り替えて中央へスクロール）
+    private func jump(to line: Int) {
+        showFind = false
+        jumpLine = line
+        if mode != .text {
+            mode = .text
         }
     }
 
