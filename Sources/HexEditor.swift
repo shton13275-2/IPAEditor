@@ -13,7 +13,7 @@ struct HexEditorView: View {
     let commit: (Data) -> Void
 
     enum Prompt: String, Identifiable {
-        case goto, find, text
+        case goto, find, text, findAll
         var id: String { rawValue }
     }
 
@@ -30,6 +30,8 @@ struct HexEditorView: View {
     @State private var prompt: Prompt = .goto
     @State private var showPrompt = false
     @State private var field = ""
+    @State private var hitOffsets: [Int] = []
+    @State private var showHits = false
 
     private var pageCount: Int { max(1, (data.count + pageSize - 1) / pageSize) }
     private var offsetDigits: Int { max(4, String(data.count, radix: 16).count) }
@@ -53,6 +55,7 @@ struct HexEditorView: View {
             grid
             keypad
         }
+        .sheet(isPresented: $showHits) { hitsSheet }
         .alert(promptTitle, isPresented: $showPrompt) {
             TextField(promptHint, text: $field)
                 .textInputAutocapitalization(.characters)
@@ -67,6 +70,7 @@ struct HexEditorView: View {
         case .goto: return "オフセットへ移動 (16進)"
         case .find: return "バイト列を検索 (16進)"
         case .text: return "文字列で上書き"
+        case .findAll: return "全一致を検索 (16進)"
         }
     }
 
@@ -75,6 +79,7 @@ struct HexEditorView: View {
         case .goto: return "例: 1F40"
         case .find: return "例: DE AD BE EF"
         case .text: return "上書きする文字列"
+        case .findAll: return "例: DE AD BE EF"
         }
     }
 
@@ -185,6 +190,7 @@ struct HexEditorView: View {
                 tool(rangeMode ? "範囲:ON" : "範囲") { toggleRange() }
                 tool("移動") { open(.goto) }
                 tool("検索") { open(.find) }
+                tool("全検索") { open(.findAll) }
                 tool("文字") { open(.text) }
                 tool("コピー") { copyRange() }
                 tool("貼付") { pasteHex() }
@@ -351,11 +357,53 @@ struct HexEditorView: View {
             } else {
                 status = "見つかりません"
             }
+        case .findAll:
+            guard let pat = parseHex(field), !data.isEmpty else {
+                status = "バイト列が不正"
+                return
+            }
+            let needle = Data(pat)
+            var found: [Int] = []
+            var start = 0
+            while found.count < 500, start < data.count,
+                  let r = data.range(of: needle, options: [], in: start..<data.count) {
+                found.append(r.lowerBound)
+                start = r.lowerBound + 1
+            }
+            hitOffsets = found
+            showHits = true
         case .text:
             let bytes = Array(field.utf8)
             guard !bytes.isEmpty else { return }
             writeBytes(bytes, at: selected)
             status = "\(bytes.count)バイト上書き"
+        }
+    }
+
+    /// 全一致の一覧。タップすると、その位置を選択する
+    private var hitsSheet: some View {
+        NavigationStack {
+            List {
+                if hitOffsets.isEmpty {
+                    Text("見つかりません").foregroundStyle(.secondary)
+                }
+                ForEach(hitOffsets, id: \.self) { off in
+                    Button {
+                        select(off)
+                        showHits = false
+                    } label: {
+                        Text("0x" + hex(off, width: offsetDigits))
+                            .font(.body.monospaced())
+                    }
+                }
+            }
+            .navigationTitle("一致 \(hitOffsets.count)件")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("閉じる") { showHits = false }
+                }
+            }
         }
     }
 
